@@ -9,8 +9,8 @@
 // @match        https://bondage-europe.com/*
 // @match        https://www.bondage-europe.com/*
 // @match        http://localhost:*/*
-// @homepage     https://github.com/ItsNorin/Bondage-Club-XToys-Integration
-// @downloadURL  https://itsnorin.github.io/Bondage-Club-XToys-Integration/BC-XToysLoader.user.js
+// @homepage     https://github.com/ItsNorin/Bondage-Club-More-Crafts
+// @downloadURL  https://itsnorin.github.io/Bondage-Club-More-Crafts/more_crafts.js
 // @run-at       document-end
 // @grant        none
 // ==/UserScript==
