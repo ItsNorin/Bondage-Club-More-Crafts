@@ -576,6 +576,20 @@ console.log("Starting " + "BC More Crafts" + " version " + BC_MoreCrafts_Version
             }
         }
     )
+
+    // bypass slicing crafts on login, increase to 240 items
+    modApi.hookFunction(
+        'LoginResponse',
+        1,
+        (args, next) => {
+            var crafting = CraftingDecompressServerData(args[0].Crafting);
+            next(args);
+
+			CraftingLoadServer(crafting);
+            //console.log(Player.Crafting);
+            if (Player.Crafting.length > 240) Player.Crafting = Player.Crafting.slice(0, 240);
+        }
+    )
 })();
 
 async function waitFor(func, cancelFunc = () => false) {
