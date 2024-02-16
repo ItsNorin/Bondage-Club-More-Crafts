@@ -28,3 +28,513 @@ const modApi = bcModSdk.registerMod({
 
 console.log("Starting " + "BC More Crafts" + " version " + BC_MoreCrafts_Version + ".");
 
+
+(async function () {
+    await waitFor(() => ServerIsConnected && ServerSocket);
+
+    modApi.hookFunction(
+        'CraftingClick',
+        0,
+        (args, next) => {
+            // Can always exit or cancel
+            if (MouseIn(1895, 15, 90, 90) && !["Color", "Extended", "OverridePriority"].includes(CraftingMode)) CraftingExit();
+            if (MouseIn(1790, 15, 90, 90) && !["Color", "Extended", "Slot", "OverridePriority"].includes(CraftingMode)) return CraftingModeSet("Slot");
+
+            // In slot mode, we can select which item slot to craft
+            if (CraftingMode == "Slot") {
+
+                // 12-ish pages of slots
+                if (MouseIn(1475, 15, 90, 90)) {
+                    CraftingOffset = CraftingOffset - 20;
+                    if (CraftingOffset < 0) CraftingOffset = 240 - 20;
+                } else if (MouseIn(1580, 15, 90, 90)) {
+                    CraftingOffset = CraftingOffset + 20;
+                    if (CraftingOffset >= 240) CraftingOffset = 0;
+                }
+
+                // Enter/Exit destroy item mode; or exit reorder mode.
+                if (MouseIn(1790, 15, 90, 90)) {
+                    if (CraftingReorderMode != "None") {
+                        CraftingReorderModeSet("None");
+                    } else {
+                        CraftingDestroy = !CraftingDestroy;
+                    }
+                }
+
+                // Craft slot reordering mode.
+                if (MouseIn(1675, 15, 90, 90)) {
+                    if (CraftingDestroy) CraftingDestroy = false;
+
+                    CraftingReorderModeSet(); // Advance mode
+                }
+
+                // Scan 20 items for clicks
+                for (let S = 0; S < 20; S++) {
+
+                    // If the box was clicked
+                    let X = (S % 4) * 500 + 15;
+                    let Y = Math.floor(S / 4) * 180 + 130;
+                    const Craft = Player.Crafting[S + CraftingOffset];
+                    if (!MouseIn(X, Y, 470, 140)) continue;
+
+                    // Reorder, destroy, edit or create a new crafting item
+                    if (CraftingReorderMode == "Select") {
+                        // If the index isn't present, add it.  If it
+                        // is present, delete it.  This has the effect
+                        // of toggling the slot in the UI.
+                        const idx = CraftingReorderList.indexOf(S + CraftingOffset);
+                        if (idx >= 0) {
+                            CraftingReorderList.splice(idx, 1);
+                        } else {
+                            CraftingReorderList.push(S + CraftingOffset);
+                        }
+                    } else if (CraftingReorderMode == "Place") {
+                        // Swap the slot clicked with the first entry in the list.
+                        const idx = CraftingReorderList.shift();
+                        const item = Player.Crafting[S + CraftingOffset];
+                        Player.Crafting[S + CraftingOffset] = Player.Crafting[idx];
+                        Player.Crafting[idx] = item;
+                        if (CraftingReorderList.length <= 0) {
+                            // List exhausted; commit changes and end reorder mode.
+                            CraftingReorderModeSet("None");
+                        }
+                    } else if (CraftingDestroy) {
+                        if (Craft && Craft.Name) {
+                            if (S + CraftingOffset < Player.Crafting.length) Player.Crafting[S + CraftingOffset] = null;
+                            CraftingSaveServer();
+                        }
+                    } else if (Craft && Craft.Name) {
+                        CraftingSlot = S + CraftingOffset;
+                        CraftingSelectedItem = CraftingConvertItemToSelected(Craft);
+                        CraftingModeSet("Name");
+                    } else {
+                        CraftingSlot = S + CraftingOffset;
+                        CraftingSelectedItem = {
+                            Name: "",
+                            Description: "",
+                            Color: "Default",
+                            Asset: null,
+                            Property: "Normal",
+                            Lock: null,
+                            Private: false,
+                            TypeRecord: null,
+                            ItemProperty: {},
+                            get OverridePriority() {
+                                return this.ItemProperty.OverridePriority;
+                            },
+                            set OverridePriority(value) {
+                                if (value == null) {
+                                    delete this.ItemProperty.OverridePriority;
+                                } else {
+                                    this.ItemProperty.OverridePriority = value;
+                                }
+                            },
+                        };
+                        CraftingModeSet("Item");
+                        CraftingItemListBuild();
+                    }
+
+                }
+                return;
+            }
+
+            // In item selection mode, the player picks an item from her inventory
+            if (CraftingMode == "Item") {
+                if (MouseIn(1580, 15, 90, 90)) {
+                    CraftingOffset = CraftingOffset - 24;
+                    if (CraftingOffset < 0) CraftingOffset = Math.floor(CraftingItemList.length / 24) * 24;
+                }
+                if (MouseIn(1685, 15, 90, 90)) {
+                    CraftingOffset = CraftingOffset + 24;
+                    if (CraftingOffset >= CraftingItemList.length) CraftingOffset = 0;
+                }
+                for (let I = CraftingOffset; I < CraftingItemList.length && I < CraftingOffset + 24; I++) {
+                    const X = ((I - CraftingOffset) % 8) * 249 + 17;
+                    const Y = Math.floor((I - CraftingOffset) / 8) * 290 + 130;
+                    const asset = CraftingItemList[I];
+                    if (MouseIn(X, Y, 225, 275)) {
+                        CraftingSelectedItem.Asset = asset;
+                        CraftingSelectedItem.TypeRecord = {};
+                        CraftingSelectedItem.Lock = null;
+                        CraftingSelectedItem.Color = CraftingSelectedItem.Asset.DefaultColor.join(",");
+                        CraftingModeSet("Property");
+                        ElementRemove("InputSearch");
+                    }
+                }
+                return;
+            }
+
+            // In property mode, the user can select a special property to apply to the item
+            if (CraftingMode == "Property") {
+                let Pos = 0;
+                for (const [Name, Allow] of CraftingPropertyMap)
+                    if (Allow(CraftingSelectedItem.Asset)) {
+                        let X = (Pos % 4) * 500 + 15;
+                        let Y = Math.floor(Pos / 4) * 175 + 130;
+                        if (MouseIn(X, Y, 470, 150)) {
+                            CraftingSelectedItem.Property = Name;
+                            if (CraftingSelectedItem.Lock) CraftingModeSet("Name");
+                            else CraftingModeSet("Lock");
+                            return;
+                        }
+                        Pos++;
+                    }
+                return;
+            }
+
+            // In lock selection mode, the user can pick a default lock or no lock at all
+            if (CraftingMode == "Lock") {
+                if (MouseIn(1685, 15, 90, 90)) {
+                    CraftingSelectedItem.Lock = null;
+                    CraftingModeSet("Name");
+                }
+                let Pos = 0;
+                for (let L = 0; L < CraftingLockList.length; L++)
+                    for (let Item of Player.Inventory)
+                        if ((Item.Asset != null) && (Item.Asset.Name == CraftingLockList[L]) && Item.Asset.IsLock) {
+                            let X = (Pos % 8) * 249 + 17;
+                            let Y = Math.floor(Pos / 8) * 290 + 130;
+                            if (MouseIn(X, Y, 225, 275)) {
+                                CraftingModeSet("Name");
+                                CraftingSelectedItem.Lock = Item.Asset;
+                            }
+                            Pos++;
+                        }
+                return;
+            }
+
+            // In naming mode, we can also modify the color or go back to previous screens
+            if (CraftingMode == "Name") {
+                if (MouseIn(1685, 15, 90, 90)) {
+                    const prop = CraftingConvertSelectedToItem();
+                    if (prop.Name == "") return;
+                    Player.Crafting[CraftingSlot] = prop;
+                    CraftingSelectedItem = null;
+                    CraftingSaveServer();
+                    CraftingModeSet("Slot");
+                } else if (MouseIn(880, 900, 90, 90)) {
+                    CraftingNakedPreview = !CraftingNakedPreview;
+                    CraftingUpdatePreview();
+                } else if (MouseIn(80, 250, 225, 275)) {
+                    CraftingModeSet("Item");
+                    CraftingItemListBuild();
+                    return null;
+                } else if (MouseIn(425, 250, 225, 275) && CraftingSelectedItem.Asset.AllowLock) {
+                    CraftingModeSet("Lock");
+                    return null;
+                } else if (MouseIn(80, 650, 570, 190)) {
+                    CraftingModeSet("Property");
+                    return null;
+                } else if (MouseIn(1843, 598, 64, 64)) {
+                    CraftingModeSet("Color");
+                    const Item = InventoryGet(CraftingPreview, CraftingSelectedItem.Asset.DynamicGroupName);
+                    ItemColorLoad(CraftingPreview, Item, 1200, 25, 775, 950, true);
+                    ItemColorOnExit((c, i) => {
+                        CraftingModeSet("Name");
+                        CraftingSelectedItem.Color = Array.isArray(i.Color) ? i.Color.join(",") : i.Color || "Default";
+                        ElementValue("InputColor", CraftingSelectedItem.Color);
+                        CraftingUpdatePreview();
+                    });
+                } else if (MouseIn(1175, 768, 64, 64)) {
+                    CraftingSelectedItem.Private = !CraftingSelectedItem.Private;
+                } else if (MouseIn(1175, 858, 60, 60) && CraftingSelectedItem.Asset.Archetype) {
+                    const item = CraftingPreview.Appearance.find(i => {
+                        return i.Asset.Name === CraftingSelectedItem.Asset.Name && i.Asset.DynamicGroupName === CraftingSelectedItem.Asset.DynamicGroupName;
+                    });
+                    if (item !== undefined) {
+                        DialogExtendItem(item);
+                        CraftingModeSet("Extended");
+                    }
+                } else if (MouseIn(1276, 683, 60, 60)) {
+                    CraftingModeSet("OverridePriority");
+                }
+                return;
+            }
+
+            // In color selection mode, we allow picking a color
+            if (CraftingMode == "Color") {
+                if (MouseIn(880, 900, 90, 90)) {
+                    CraftingNakedPreview = !CraftingNakedPreview;
+                    CraftingUpdatePreview();
+                } else if (MouseIn(1200, 25, 775, 950)) {
+                    ItemColorClick(CraftingPreview, CraftingSelectedItem.Asset.DynamicGroupName, 1200, 25, 775, 950, true);
+                    setTimeout(CraftingRefreshPreview, 100);
+                }
+                return;
+            }
+
+            // Need the `DialogFocusItem` check here as there's a bit of a race condition
+            if (CraftingMode == "Extended" && DialogFocusItem) {
+                CommonCallFunctionByNameWarn(`Inventory${DialogFocusItem.Asset.Group.Name}${DialogFocusItem.Asset.Name}Click`);
+            }
+
+            if (CraftingMode == "OverridePriority") {
+                if (MouseIn(1895, 15, 90, 90)) {
+                    CraftingModeSet("Name");
+                } else if (MouseIn(1685, 120, 90, 90)) {
+                    for (const layer of CraftingSelectedItem.Asset.Layer) {
+                        const element = /** @type {HTMLInputElement} */(document.getElementById(`InputPriority${layer.Name}`));
+                        if (element == null) {
+                            continue;
+                        }
+                        element.value = element.dataset.propertyDefault;
+                    }
+                    delete CraftingSelectedItem.ItemProperty.OverridePriority;
+                    CraftingUpdatePreview();
+                } else if (CraftingSelectedItem.Asset.Layer.length > 20) {
+                    const start = CraftingOverridePriorityOffset;
+                    const stop = CraftingSelectedItem.Asset.Layer.length;
+                    if (MouseIn(1895, 120, 90, 90)) {
+                        CraftingOverridePriorityOffset = (start + 20) > stop ? 0 : start + 20;
+                    } else if (MouseIn(1790, 120, 90, 90)) {
+                        CraftingOverridePriorityOffset = (start - 20) < 0 ? 20 * (Math.ceil(stop / 20) - 1) : start - 20;
+                    }
+                }
+            }
+        }
+    );
+
+    modApi.hookFunction(
+        'CraftingRun',
+        0,
+        (args, next) => {
+            // The exit button is everywhere
+            if (!["Color", "Extended", "OverridePriority"].includes(CraftingMode)) {
+                DrawButton(1895, 15, 90, 90, "", "White", "Icons/Exit.png", TextGet("Exit"));
+            }
+            if (!["Color", "Slot", "Extended", "OverridePriority"].includes(CraftingMode)) {
+                DrawButton(1790, 15, 90, 90, "", "White", "Icons/Cancel.png", TextGet("Cancel"));
+            }
+
+            // In slot selection mode, we show the slots to select from
+            if (CraftingMode == "Slot") {
+                let BGColor;
+                let TrashCancel = false;
+
+                switch (CraftingReorderMode) {
+                    case "None":
+                        BGColor = CraftingDestroy ? "Pink" : "White";
+                        break;
+
+                    case "Select":
+                        BGColor = "Yellow";
+                        break;
+
+                    case "Place":
+                        BGColor = "Grey";
+                        break;
+                }
+
+                DrawButton(1475, 15, 90, 90, "", "White", "Icons/Prev.png", TextGet("Previous"));
+                DrawButton(1580, 15, 90, 90, "", "White", "Icons/Next.png", TextGet("Next"));
+                DrawButton(1685, 15, 90, 90, "", "White", "Icons/Swap.png", TextGet("Reorder"));
+                if (CraftingReorderMode == "Select") {
+                    DrawText(`${TextGet("ReorderSelect")} ${CraftingReorderList.length}`, 737, 60, "White", "Black");
+                } else if (CraftingReorderMode == "Place") {
+                    DrawText(`${TextGet("ReorderPlace")} ${CraftingReorderList.length}`, 737, 60, "White", "Black");
+                } else if (CraftingDestroy) {
+                    DrawText(`${TextGet("SelectDestroy")} ${Math.floor(CraftingOffset / 20) + 1} / ${240 / 20}.`, 737, 60, "White", "Black");
+                } else {
+                    DrawText(`${TextGet("SelectSlot")} ${Math.floor(CraftingOffset / 20) + 1} / ${240 / 20}.`, 737, 60, "White", "Black");
+                    TrashCancel = true;
+                }
+                if (TrashCancel) {
+                    DrawButton(1790, 15, 90, 90, "", "White", "Icons/Trash.png", TextGet("Destroy"));
+                } else {
+                    DrawButton(1790, 15, 90, 90, "", "White", "Icons/Cancel.png", TextGet("Cancel"));
+                }
+                for (let S = CraftingOffset; S < CraftingOffset + 20; S++) {
+                    let X = ((S - CraftingOffset) % 4) * 500 + 15;
+                    let Y = Math.floor((S - CraftingOffset) / 4) * 180 + 130;
+                    let Craft = Player.Crafting[S];
+                    switch (CraftingReorderMode) {
+                        case "Select":
+                            BGColor = CraftingReorderList.includes(S) ? "Chartreuse" : "Yellow";
+                            break;
+
+                        case "Place":
+                            BGColor = CraftingReorderList.includes(S) ? "Green" : "Grey";
+                            break;
+
+                        default:
+                            break;
+                    }
+                    if (!Craft) {
+                        DrawButton(X, Y, 470, 140, TextGet("EmptySlot"), BGColor);
+                    } else {
+                        DrawButton(X, Y, 470, 140, "", BGColor);
+                        DrawTextFit(Craft.Name, X + 295, Y + 25, 315, "Black", "Silver");
+                        for (let Item of Player.Inventory) {
+                            if (Item.Asset.Name == Craft.Item) {
+                                DrawImageResize("Assets/" + Player.AssetFamily + "/" + Item.Asset.DynamicGroupName + "/Preview/" + Item.Asset.Name + ".png", X + 3, Y + 3, 135, 135);
+                                DrawTextFit(Item.Asset.Description, X + 295, Y + 70, 315, "Black", "Silver");
+                                DrawTextFit(TextGet("Property" + Craft.Property), X + 295, Y + 115, 315, "Black", "Silver");
+                                if ((Craft.Lock != null) && (Craft.Lock != ""))
+                                    DrawImageResize("Assets/" + Player.AssetFamily + "/ItemMisc/Preview/" + Craft.Lock + ".png", X + 70, Y + 70, 70, 70);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // In item selection mode, we show all restraints from the player inventory
+            if (CraftingMode == "Item") {
+                DrawText(TextGet("SelectItem"), 1120, 60, "White", "Black");
+                DrawButton(1580, 15, 90, 90, "", "White", "Icons/Prev.png", TextGet("Previous"));
+                DrawButton(1685, 15, 90, 90, "", "White", "Icons/Next.png", TextGet("Next"));
+                ElementPosition("InputSearch", 315, 52, 600);
+                for (let I = CraftingOffset; I < CraftingItemList.length && I < CraftingOffset + 24; I++) {
+                    let Item = CraftingItemList[I];
+                    let X = ((I - CraftingOffset) % 8) * 249 + 17;
+                    let Y = Math.floor((I - CraftingOffset) / 8) * 290 + 130;
+                    let Icons = DialogGetAssetIcons(Item);
+                    DrawAssetPreview(X, Y, Item, { Icons, Hover: true });
+                }
+            }
+
+            // In item selection mode, we show all restraints from the player inventory
+            if (CraftingMode == "Property") {
+                DrawText(TextGet("SelectProperty").replace("AssetDescription", CraftingSelectedItem.Asset.Description), 880, 60, "White", "Black");
+                let Pos = 0;
+                for (const [Name, Allow] of CraftingPropertyMap)
+                    if (Allow(CraftingSelectedItem.Asset)) {
+                        let X = (Pos % 4) * 500 + 15;
+                        let Y = Math.floor(Pos / 4) * 175 + 130;
+                        DrawButton(X, Y, 470, 150, "", "White");
+                        DrawText(TextGet("Property" + Name), X + 235, Y + 30, "Black", "Silver");
+                        DrawTextWrap(TextGet("Description" + Name), X + 20, Y + 50, 440, 100, "Black", null, 2);
+                        Pos++;
+                    }
+            }
+
+            // In lock selection mode, the player can auto-apply a lock to it's item
+            if (CraftingMode == "Lock") {
+                DrawButton(1685, 15, 90, 90, "", "White", "Icons/Unlock.png", TextGet("NoLock"));
+                DrawText(TextGet("SelectLock").replace("AssetDescription", CraftingSelectedItem.Asset.Description).replace("PropertyName", TextGet("Property" + CraftingSelectedItem.Property)), 830, 60, "White", "Black");
+                let Pos = 0;
+                for (let L = 0; L < CraftingLockList.length; L++)
+                    for (let Item of Player.Inventory)
+                        if ((Item.Asset != null) && (Item.Asset.Name == CraftingLockList[L]) && Item.Asset.IsLock) {
+                            let X = (Pos % 8) * 249 + 17;
+                            let Y = Math.floor(Pos / 8) * 290 + 130;
+                            let Description = Item.Asset.Description;
+                            let Background = MouseIn(X, Y, 225, 275) && !CommonIsMobile ? "cyan" : "#fff";
+                            let Foreground = "Black";
+                            let Icons = DialogGetAssetIcons(Item.Asset);
+                            DrawAssetPreview(X, Y, Item.Asset, { Hover: true, Description, Background, Foreground, Icons });
+                            Pos++;
+                        }
+            }
+
+            // In lock selection mode, the player can auto-apply a lock to it's item
+            if (CraftingMode == "Name") {
+                DrawButton(1685, 15, 90, 90, "", "White", "Icons/Accept.png", TextGet("Accept"));
+                DrawText(TextGet("SelectName").replace("AssetDescription", CraftingSelectedItem.Asset.Description).replace("PropertyName", TextGet("Property" + CraftingSelectedItem.Property)), 830, 60, "White", "Black");
+                let Icons = DialogGetAssetIcons(CraftingSelectedItem.Asset);
+                DrawAssetPreview(80, 250, CraftingSelectedItem.Asset, { Hover: true, Icons });
+                if (CraftingSelectedItem.Lock != null) {
+                    let Description = CraftingSelectedItem.Lock.Description;
+                    Icons = DialogGetAssetIcons(CraftingSelectedItem.Lock);
+                    DrawAssetPreview(425, 250, CraftingSelectedItem.Lock, { Hover: true, Description, Icons });
+                } else DrawButton(425, 250, 225, 275, TextGet("NoLock"), "White");
+                DrawButton(80, 650, 570, 190, "", "White");
+                DrawCharacter(CraftingPreview, 700, 100, 0.9, false);
+                DrawButton(880, 900, 90, 90, "", "white", `Icons/${CraftingNakedPreview ? "Dress" : "Naked"}.png`);
+                DrawText(TextGet("Property" + CraftingSelectedItem.Property), 365, 690, "Black", "Silver");
+                DrawTextWrap(TextGet("Description" + CraftingSelectedItem.Property), 95, 730, 540, 100, "Black", null, 2);
+                DrawText(TextGet("EnterName"), 1550, 200, "White", "Black");
+                ElementPosition("InputName", 1550, 275, 750);
+                DrawText(TextGet("EnterDescription"), 1550, 375, "White", "Black");
+                ElementPosition("InputDescription", 1550, 450, 750);
+                DrawText(TextGet("EnterColor"), 1550, 550, "White", "Black");
+                ElementPosition("InputColor", 1510, 625, 670);
+                DrawButton(1843, 598, 64, 64, "", "White", "Icons/Color.png");
+                DrawText(TextGet("EnterPriority"), 1550, 715, "White", "Black");
+                ElementPosition("InputPriority", 1225, 710, 100);
+                DrawText(TextGet("EnterPrivate"), 1550, 805, "White", "Black");
+                DrawButton(1175, 768, 64, 64, "", "White", CraftingSelectedItem.Private ? "Icons/Checked.png" : "");
+                if (CraftingSelectedItem.Asset.Archetype) {
+                    DrawText(TextGet("EnterType"), 1550, 890, "White", "Black");
+                    DrawButton(1175, 858, 60, 60, "", "White", "Icons/Small/Use.png");
+                }
+                DrawButton(1276, 683, 60, 60, "", "White", "Icons/Small/Use.png");
+            }
+
+            // In color mode, the player can change the color of each parts of the item
+            if (CraftingMode == "Color") {
+                DrawText(TextGet("SelectColor"), 600, 60, "White", "Black");
+                DrawCharacter(CraftingPreview, -100, 100, 2, false);
+                DrawCharacter(CraftingPreview, 700, 100, 0.9, false);
+                DrawButton(880, 900, 90, 90, "", "white", `Icons/${CraftingNakedPreview ? "Dress" : "Naked"}.png`);
+                ItemColorDraw(CraftingPreview, CraftingSelectedItem.Asset.DynamicGroupName, 1200, 25, 775, 950, true);
+            }
+
+            // Need the `DialogFocusItem` check here as there's a bit of a race condition
+            if (CraftingMode == "Extended" && DialogFocusItem) {
+                CommonCallFunctionByNameWarn(`Inventory${DialogFocusItem.Asset.Group.Name}${DialogFocusItem.Asset.Name}Draw`);
+                DrawButton(1885, 25, 90, 90, "", "White", "Icons/Exit.png");
+                DrawCharacter(CraftingPreview, 500, 100, 0.9, false);
+            }
+
+            if (CraftingMode == "OverridePriority") {
+                DrawText(TextGet("SelectPriority"), 830, 60, "White", "Black");
+                DrawCharacter(CraftingPreview, 500, 100, 0.9, false);
+                DrawButton(1895, 15, 90, 90, "", "White", "Icons/Exit.png", TextGet("Return"));
+                DrawButton(1685, 120, 90, 90, "", "White", "Icons/Swap.png", "Reset");
+                DrawTextFit(
+                    `${1 + CraftingOverridePriorityOffset / 20} / ${Math.ceil(CraftingSelectedItem.Asset.Layer.length / 20)}`,
+                    1835, 60, 120, "White", "Black",
+                );
+                if (CraftingSelectedItem.Asset.Layer.length > 20) {
+                    DrawButton(1790, 120, 90, 90, "", "White", "Icons/Prev.png", TextGet("Previous"));
+                    DrawButton(1895, 120, 90, 90, "", "White", "Icons/Next.png", TextGet("Next"));
+                } else {
+                    DrawButton(1790, 120, 90, 90, "", "Gray", "Icons/Prev.png", TextGet("Previous"), true);
+                    DrawButton(1895, 120, 90, 90, "", "Gray", "Icons/Next.png", TextGet("Next"), true);
+                }
+
+                MainCanvas.textAlign = "left";
+                const start = CraftingOverridePriorityOffset;
+                const stop = start + 20;
+                for (const [i, layer] of CommonEnumerate(CraftingSelectedItem.Asset.Layer)) {
+                    const element = document.getElementById(`InputPriority${layer.Name}`);
+                    if (element == null) {
+                        continue;
+                    }
+
+                    if (i >= start && i < stop) {
+                        element.style.display = "block";
+                        const x = 1000 + Math.floor((i - start) / 10) * 500;
+                        const y = 250 + (i % 10) * 70;
+                        ElementPosition(element.id, x, y, 100);
+
+                        const key = `${CraftingSelectedItem.Asset.Group.Name}${CraftingSelectedItem.Asset.Name}${layer.Name}`;
+                        let layerName = CraftingLayerNames.get(key);
+                        if (layerName === key) {
+                            layerName = layer.Name;
+                        } else if (!layerName) {
+                            layerName = CraftingSelectedItem.Asset.Description;
+                        }
+                        DrawTextFit(layerName, x + 50, y + 2, 400, "White", "Black");
+                    } else {
+                        element.style.display = "none";
+                    }
+                }
+                MainCanvas.textAlign = "center";
+            }
+        }
+    )
+})();
+
+async function waitFor(func, cancelFunc = () => false) {
+    while (!func()) {
+        if (cancelFunc()) return false;
+        await sleep(10);
+    }
+    return true;
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
