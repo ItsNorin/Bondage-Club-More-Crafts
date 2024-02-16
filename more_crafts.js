@@ -531,13 +531,13 @@ console.log("Starting " + "BC More Crafts" + " version " + BC_MoreCrafts_Version
     // load 240 items instead
     modApi.hookFunction(
         'CraftingLoadServer',
-        0,
+        1,
         (args, next) => {
             Player.Crafting = [];
             let Refresh = false;
             /** @type {Record<number, unknown>} */
             const CriticalErrors = {};
-            const data = CraftingDecompressServerData(Packet);
+            const data = CraftingDecompressServerData(args[0]);
             for (const [i, item] of CommonEnumerate(data)) {
                 if (item == null) {
                     Player.Crafting.push(null);
