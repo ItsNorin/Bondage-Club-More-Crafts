@@ -32,6 +32,7 @@ console.log("Starting " + "BC More Crafts" + " version " + BC_MoreCrafts_Version
 (async function () {
     await waitFor(() => ServerIsConnected && ServerSocket);
 
+    // pages
     modApi.hookFunction(
         'CraftingClick',
         0,
@@ -294,6 +295,7 @@ console.log("Starting " + "BC More Crafts" + " version " + BC_MoreCrafts_Version
         }
     );
 
+    // pages
     modApi.hookFunction(
         'CraftingRun',
         0,
@@ -522,6 +524,55 @@ console.log("Starting " + "BC More Crafts" + " version " + BC_MoreCrafts_Version
                     }
                 }
                 MainCanvas.textAlign = "center";
+            }
+        }
+    )
+
+    // load 240 items instead
+    modApi.hookFunction(
+        'CraftingLoadServer',
+        0,
+        (args, next) => {
+            Player.Crafting = [];
+            let Refresh = false;
+            /** @type {Record<number, unknown>} */
+            const CriticalErrors = {};
+            const data = CraftingDecompressServerData(Packet);
+            for (const [i, item] of CommonEnumerate(data)) {
+                if (item == null) {
+                    Player.Crafting.push(null);
+                    continue;
+                }
+
+                // Make sure that the item is a valid craft
+                switch (CraftingValidate(item)) {
+                    case CraftingStatusType.OK:
+                        Player.Crafting.push(item);
+                        break;
+                    case CraftingStatusType.ERROR:
+                        Player.Crafting.push(item);
+                        Refresh = true;
+                        break;
+                    case CraftingStatusType.CRITICAL_ERROR:
+                        Player.Crafting.push(null);
+                        Refresh = true;
+                        CriticalErrors[i] = (item);
+                        break;
+                }
+
+                // Too many items, skip the rest
+                if (Player.Crafting.length >= 240) break;
+            }
+
+            /**
+             * One or more validation errors were encountered that were successfully resolved;
+             * push the fixed items back to the server */
+            if (Refresh) {
+                const nCritical = Object.keys(CriticalErrors).length;
+                if (nCritical > 0) {
+                    console.warn(`Removing ${nCritical} corrupted crafted items`, CriticalErrors);
+                }
+                CraftingSaveServer();
             }
         }
     )
